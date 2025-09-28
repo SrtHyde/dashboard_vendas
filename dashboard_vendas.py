@@ -713,6 +713,37 @@ def main():
     
     st.plotly_chart(fig_distribuicao, use_container_width=True)
     
+    # Segmentação de Clientes por Valor e Frequência
+    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">🏆 Segmentação de Clientes por Valor e Frequência</h3>', unsafe_allow_html=True)
+    
+    # Agrupar dados por cliente
+    analise_clientes = df_filtered.groupby('Cliente').agg(
+        Frequencia=('ID_Venda', 'count'),
+        Valor_Total_Gasto=('Valor_Com_Desconto', 'sum')
+    ).reset_index()
+
+    fig_clientes = px.scatter(
+        analise_clientes,
+        x='Frequencia',
+        y='Valor_Total_Gasto',
+        size='Valor_Total_Gasto', # Tamanho da bolha representa o valor
+        hover_name='Cliente',
+        title='🏆 Segmentação de Clientes por Valor e Frequência',
+        labels={'Frequencia': 'Número de Compras', 'Valor_Total_Gasto': 'Receita Total Gerada (R$)'}
+    )
+    
+    # Aplicar o tema personalizado ao gráfico
+    fig_clientes.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        title_font_color=ROXO_PRINCIPAL,
+        font_color=ROXO_CLARO,
+        xaxis_title="Número de Compras",
+        yaxis_title="Receita Total Gerada (R$)"
+    )
+    
+    st.plotly_chart(fig_clientes, use_container_width=True)
+    
     # Análise de Avaliação e NPS
     st.markdown('<h2 class="section-title">⭐ Análise de Avaliação e NPS</h2>', unsafe_allow_html=True)
     
@@ -1016,6 +1047,31 @@ def main():
     )
     
     st.plotly_chart(fig_heatmap, use_container_width=True)
+    
+    # Análise de efetividade dos descontos
+    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">💸 Análise de Efetividade dos Descontos</h3>', unsafe_allow_html=True)
+    
+    fig_desconto = px.scatter(
+        df_filtered,
+        x='Desconto (%)',
+        y='Quantidade',
+        color='Categoria', # Opcional: para ver o comportamento por categoria
+        title='💸 Análise de Efetividade dos Descontos',
+        labels={'Desconto (%)': 'Desconto Aplicado (%)', 'Quantidade': 'Itens Vendidos na Transação'},
+        trendline='ols' # Adiciona uma linha de tendência para visualizar a correlação
+    )
+    
+    # Aplicar o tema personalizado ao gráfico
+    fig_desconto.update_layout(
+        plot_bgcolor='rgba(0,0,0,0)',
+        paper_bgcolor='rgba(0,0,0,0)',
+        title_font_color=ROXO_PRINCIPAL,
+        font_color=ROXO_CLARO,
+        xaxis_title="Desconto Aplicado (%)",
+        yaxis_title="Itens Vendidos na Transação"
+    )
+    
+    st.plotly_chart(fig_desconto, use_container_width=True)
     
     # Análise geográfica
     st.markdown('<h2 class="section-title">🗺️ Análise Geográfica</h2>', unsafe_allow_html=True)
