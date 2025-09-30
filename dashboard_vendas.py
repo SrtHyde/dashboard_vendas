@@ -22,7 +22,7 @@ import os
 warnings.filterwarnings('ignore')
 
 # =============================================================================
-# PALETA DE CORES FEMININA - IDENTIDADE VISUAL
+# PALETA DE CORES  - IDENTIDADE VISUAL
 # =============================================================================
 
 # Cores principais
@@ -170,24 +170,19 @@ st.markdown(f"""
         font-weight: 600;
     }}
     
-    /* =============================================================================
-       REGRAS DE ALTA ESPECIFICIDADE PARA O FILTRO DE DATA NA SIDEBAR
-       ============================================================================= */
     
-    /* Alvo: O container do input de data DENTRO da sidebar */
     section[data-testid="stSidebar"] .stDateInput > div > div {{
         background-color: {BRANCO};
         border: 2px solid {ROSA_PRINCIPAL};
         border-radius: 10px;
     }}
     
-    /* Alvo: O rótulo "Período" DENTRO da sidebar */
     section[data-testid="stSidebar"] .stDateInput label {{
         color: {BRANCO} !important;
         font-weight: 600;
     }}
     
-    /* Alvo: O CAMPO DE TEXTO do input de data DENTRO da sidebar */
+
     section[data-testid="stSidebar"] .stDateInput input {{
         color: {PRETO} !important;
         font-weight: 600;
