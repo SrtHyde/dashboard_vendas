@@ -5,3 +5,5 @@ plotly>=5.15.0
 scipy>=1.10.0
 statsmodels>=0.14.0
 datetime
+reportlab>=4.0.0
+kaleido>=0.2.1
