@@ -730,7 +730,10 @@ def main():
             title_font_color=BRANCO,
             font_color=ROXO_CLARO,
             xaxis_title="Ciclo de Vida",
-            yaxis_title="Número de Clientes"
+            yaxis_title="Número de Clientes",
+            yaxis=dict(
+                range=[0, max(ciclo_vida_counts.values) * 1.15]
+            )
         )
         st.plotly_chart(fig_ciclo, use_container_width=True)
     
@@ -1058,7 +1061,10 @@ def main():
             font_color=ROXO_CLARO,
             xaxis_title="Avaliação (Estrelas)",
             yaxis_title="Quantidade",
-            showlegend=False
+            showlegend=False,
+            yaxis=dict(
+                range=[0, max(avaliacao_counts.values) * 1.15]
+            )
         )
         st.plotly_chart(fig_avaliacoes, use_container_width=True)
     
@@ -1225,7 +1231,7 @@ def main():
             xaxis_title="Receita (R$)",
             yaxis_title="Produto",
             xaxis=dict(
-                range=[0, top_produtos.max() * 1.15]  # Aumenta o range do eixo X em 15% para acomodar os labels
+                range=[0, top_produtos.max() * 1.2]  # Aumenta o range do eixo X em 20% para acomodar os labels
             )
         )
         st.plotly_chart(fig_produtos, use_container_width=True)
@@ -1311,30 +1317,215 @@ def main():
     # Análise de efetividade dos descontos
     st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">💸 Análise de Efetividade dos Descontos</h3>', unsafe_allow_html=True)
     
-    fig_desconto = px.scatter(
-            df_filtered,
-            x='Desconto (%)',
-            y='Quantidade',
-            color='Categoria', # Opcional: para ver o comportamento por categoria
-            title='💸 Análise de Efetividade dos Descontos',
-            labels={'Desconto (%)': 'Desconto Aplicado (%)', 'Quantidade': 'Itens Vendidos na Transação'},
-            trendline='ols' # Adiciona uma linha de tendência para visualizar a correlação
-        )
-    fig_desconto.update_traces(
-        hovertemplate='<b>Desconto:</b> %{x}%<br><b>Quantidade:</b> %{y} itens<br><b>Categoria:</b> %{legendgroup}<br><b>Descrição:</b> Relação entre desconto aplicado e quantidade vendida<br><extra></extra>'
-    )
+    # Agrupar dados por faixa de desconto para criar gráfico de barras
+    df_filtered['Faixa_Desconto'] = pd.cut(df_filtered['Desconto (%)'], 
+                                          bins=[0, 5, 10, 15, 20, 25, 30, 100], 
+                                          labels=['0-5%', '5-10%', '10-15%', '15-20%', '20-25%', '25-30%', '30%+'],
+                                          include_lowest=True)
     
-    # Aplicar o tema personalizado ao gráfico
-    fig_desconto.update_layout(
+    # Calcular quantidade total vendida por faixa de desconto
+    desconto_efetividade = df_filtered.groupby('Faixa_Desconto').agg({
+        'Quantidade': 'sum',  # Mudança: soma total ao invés de média
+        'Valor_Com_Desconto': 'sum',
+        'ID_Venda': 'count'
+    }).round(2)
+    desconto_efetividade.columns = ['Quantidade_Total', 'Receita_Total', 'Numero_Vendas']
+    desconto_efetividade = desconto_efetividade.reset_index()
+    
+    # Criar layout com duas colunas para os gráficos
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # Gráfico 1: Total de itens vendidos por faixa de desconto
+        fig_desconto = px.bar(
+            desconto_efetividade,
+            x='Faixa_Desconto',
+            y='Quantidade_Total',
+            title='💸 Total de Itens Vendidos por Faixa de Desconto',
+            color='Quantidade_Total',
+            color_continuous_scale=[ROXO_SUAVE, ROXO_MEDIO, ROXO_INTENSO, ROXO_PRINCIPAL]
+        )
+        fig_desconto.update_traces(
+            text=[f'{qty:,.0f} itens' for qty in desconto_efetividade['Quantidade_Total']],
+            textposition='outside',
+            textfont_size=10,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Faixa de Desconto:</b> %{x}<br><b>Quantidade Total:</b> %{y:,.0f} itens<br><b>Receita Total:</b> R$ %{customdata[0]:,.2f}<br><b>Número de Vendas:</b> %{customdata[1]:,}<br><b>Descrição:</b> Quantidade total de itens vendidos por faixa de desconto<br><extra></extra>',
+            customdata=desconto_efetividade[['Receita_Total', 'Numero_Vendas']].values
+        )
+        
+        # Aplicar o tema personalizado ao gráfico
+        fig_desconto.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            title_font_color=BRANCO,
+            font_color=ROXO_CLARO,
+            xaxis_title="Faixa de Desconto (%)",
+            yaxis_title="Total de Itens Vendidos",
+            showlegend=False,
+            height=400,
+            yaxis=dict(
+                range=[0, max(desconto_efetividade['Quantidade_Total']) * 1.15]
+            )
+        )
+        
+        st.plotly_chart(fig_desconto, use_container_width=True)
+    
+    with col2:
+        # Gráfico 2: Porcentagem de cada faixa vs produtos sem desconto
+        # Calcular produtos sem desconto (desconto = 0)
+        produtos_sem_desconto = df_filtered[df_filtered['Desconto (%)'] == 0]['Quantidade'].sum()
+        total_produtos = df_filtered['Quantidade'].sum()
+        
+        # Calcular porcentagem de cada faixa
+        desconto_efetividade['Porcentagem'] = (desconto_efetividade['Quantidade_Total'] / total_produtos * 100).round(1)
+        
+        # Adicionar linha para produtos sem desconto
+        dados_grafico = desconto_efetividade.copy()
+        linha_sem_desconto = pd.DataFrame({
+            'Faixa_Desconto': ['Sem Desconto'],
+            'Quantidade_Total': [produtos_sem_desconto],
+            'Porcentagem': [(produtos_sem_desconto / total_produtos * 100)],
+            'Receita_Total': [df_filtered[df_filtered['Desconto (%)'] == 0]['Valor_Com_Desconto'].sum()],
+            'Numero_Vendas': [df_filtered[df_filtered['Desconto (%)'] == 0]['ID_Venda'].count()]
+        })
+        
+        # Combinar dados
+        dados_completos = pd.concat([dados_grafico, linha_sem_desconto], ignore_index=True)
+        
+        fig_porcentagem = px.bar(
+            dados_completos,
+            x='Faixa_Desconto',
+            y='Porcentagem',
+            title='📊 Distribuição Percentual por Faixa de Desconto',
+            color='Porcentagem',
+            color_continuous_scale=[ROSA_PASTEL, ROSA_PRINCIPAL, ROXO_MEDIO, ROXO_INTENSO]
+        )
+        fig_porcentagem.update_traces(
+            text=[f'{pct:.1f}%' for pct in dados_completos['Porcentagem']],
+            textposition='outside',
+            textfont_size=10,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Faixa de Desconto:</b> %{x}<br><b>Porcentagem:</b> %{y:.1f}%<br><b>Quantidade:</b> %{customdata[0]:,.0f} itens<br><b>Receita:</b> R$ %{customdata[1]:,.2f}<br><b>Descrição:</b> Percentual do total de produtos vendidos nesta faixa<br><extra></extra>',
+            customdata=dados_completos[['Quantidade_Total', 'Receita_Total']].values
+        )
+        
+        # Aplicar o tema personalizado ao gráfico
+        fig_porcentagem.update_layout(
+            plot_bgcolor='rgba(0,0,0,0)',
+            paper_bgcolor='rgba(0,0,0,0)',
+            title_font_color=BRANCO,
+            font_color=ROXO_CLARO,
+            xaxis_title="Faixa de Desconto (%)",
+            yaxis_title="Porcentagem do Total (%)",
+            showlegend=False,
+            height=400,
+            yaxis=dict(
+                range=[0, max(dados_completos['Porcentagem']) * 1.15]
+            )
+        )
+        
+        st.plotly_chart(fig_porcentagem, use_container_width=True)
+    
+    # Gráfico de barras empilhados - Valor Bruto vs Líquido vs Desconto por Mês
+    st.markdown(f'<h4 style="color: {BRANCO}; font-size: 1.2rem; margin: 1.5rem 0 1rem 0;">💰 Análise de Valores por Mês</h4>', unsafe_allow_html=True)
+    
+    # Calcular valores por mês
+    valores_mes = df_filtered.groupby(['Ano', 'Mês']).agg({
+        'Valor_Total': 'sum',  # Valor bruto
+        'Valor_Com_Desconto': 'sum',  # Valor líquido
+        'Desconto (%)': 'mean'  # Desconto médio
+    }).reset_index()
+    
+    # Calcular o valor total de desconto
+    valores_mes['Valor_Desconto'] = valores_mes['Valor_Total'] - valores_mes['Valor_Com_Desconto']
+    
+    # Criar coluna de data para ordenação
+    valores_mes['Data_Mes'] = valores_mes['Ano'].astype(str) + '-' + valores_mes['Mês'].astype(str).str.zfill(2)
+    valores_mes = valores_mes.sort_values(['Ano', 'Mês'])
+    
+    # Criar gráfico de barras empilhadas
+    fig_valores_mes = go.Figure()
+    
+    # Adicionar barra do valor líquido (base)
+    fig_valores_mes.add_trace(go.Bar(
+        name='Valor Líquido Pago',
+        x=valores_mes['Data_Mes'],
+        y=valores_mes['Valor_Com_Desconto'],
+        marker_color=ROSA_PRINCIPAL,
+        hovertemplate='<b>Mês:</b> %{x}<br><b>Valor Líquido:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Valor efetivamente pago pelos clientes<br><extra></extra>'
+    ))
+    
+    # Adicionar barra do valor de desconto (empilhada)
+    fig_valores_mes.add_trace(go.Bar(
+        name='Total de Desconto',
+        x=valores_mes['Data_Mes'],
+        y=valores_mes['Valor_Desconto'],
+        marker_color=ROXO_MEDIO,
+        hovertemplate='<b>Mês:</b> %{x}<br><b>Valor de Desconto:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Valor total concedido em descontos<br><extra></extra>'
+    ))
+    
+    # Configurar layout
+    fig_valores_mes.update_layout(
+        title='💰 Análise de Valores por Mês - Valor Bruto vs Líquido vs Desconto',
+        xaxis_title='Mês',
+        yaxis_title='Valor (R$)',
+        barmode='stack',  # Barras empilhadas
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
         title_font_color=BRANCO,
         font_color=ROXO_CLARO,
-        xaxis_title="Desconto Aplicado (%)",
-        yaxis_title="Itens Vendidos na Transação"
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        ),
+        xaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(139, 74, 107, 0.2)'
+        ),
+        yaxis=dict(
+            showgrid=True,
+            gridcolor='rgba(139, 74, 107, 0.2)',
+            tickformat='.0f'
+        )
     )
     
-    st.plotly_chart(fig_desconto, use_container_width=True)
+    st.plotly_chart(fig_valores_mes, use_container_width=True)
+    
+    # Adicionar métricas resumidas
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        valor_bruto_total = df_filtered['Valor_Total'].sum()
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center;">
+            <p class="metric-label">💰 Valor Bruto Total</p>
+            <p class="metric-value">R$ {valor_bruto_total:,.2f}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col2:
+        valor_liquido_total = df_filtered['Valor_Com_Desconto'].sum()
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center;">
+            <p class="metric-label">💳 Valor Líquido Total</p>
+            <p class="metric-value">R$ {valor_liquido_total:,.2f}</p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    with col3:
+        desconto_total = valor_bruto_total - valor_liquido_total
+        percentual_desconto = (desconto_total / valor_bruto_total * 100) if valor_bruto_total > 0 else 0
+        st.markdown(f"""
+        <div class="metric-card" style="text-align: center;">
+            <p class="metric-label">🏷️ Total de Desconto</p>
+            <p class="metric-value">R$ {desconto_total:,.2f}</p>
+            <p style="color: {ROXO_CLARO}; font-size: 0.9rem; margin: 0;">({percentual_desconto:.1f}% do valor bruto)</p>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Análise geográfica
     st.markdown('<h2 class="section-title">🗺️ Análise Geográfica</h2>', unsafe_allow_html=True)
@@ -1364,7 +1555,10 @@ def main():
             title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Estado",
-            yaxis_title="Receita (R$)"
+            yaxis_title="Receita (R$)",
+            yaxis=dict(
+                range=[0, max(estado_receita.values) * 1.15]
+            )
         )
         st.plotly_chart(fig_estados, use_container_width=True)
     
@@ -1437,7 +1631,10 @@ def main():
             title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Dia da Semana",
-            yaxis_title="Receita (R$)"
+            yaxis_title="Receita (R$)",
+            yaxis=dict(
+                range=[0, max(dia_semana_receita.values) * 1.15]
+            )
         )
         st.plotly_chart(fig_dia, use_container_width=True)
     
@@ -1463,7 +1660,10 @@ def main():
             title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Mês",
-            yaxis_title="Receita (R$)"
+            yaxis_title="Receita (R$)",
+            yaxis=dict(
+                range=[0, max(mes_receita.values) * 1.15]
+            )
         )
         st.plotly_chart(fig_mes, use_container_width=True)
     
