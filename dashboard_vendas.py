@@ -9,6 +9,16 @@ import datetime
 from datetime import datetime, timedelta
 import warnings
 from scipy.stats import norm
+import io
+import base64
+from reportlab.lib.pagesizes import letter, A4
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER, TA_LEFT
+import tempfile
+import os
 warnings.filterwarnings('ignore')
 
 # =============================================================================
@@ -173,7 +183,7 @@ st.markdown(f"""
     
     /* Alvo: O rótulo "Período" DENTRO da sidebar */
     section[data-testid="stSidebar"] .stDateInput label {{
-        color: {ROXO_PRINCIPAL} !important;
+        color: {BRANCO} !important;
         font-weight: 600;
     }}
     
@@ -278,6 +288,204 @@ def create_metric_card(title, value, delta=None, delta_color="normal"):
     </div>
     """
 
+def save_plotly_fig_to_temp(fig, filename):
+    """Salva um gráfico Plotly como imagem temporária"""
+    temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.png')
+    fig.write_image(temp_file.name, width=800, height=600, scale=2)
+    return temp_file.name
+
+def generate_sales_report_pdf(df_filtered, start_date, end_date):
+    """Gera um relatório PDF com resumo das vendas"""
+    
+    # Criar buffer para o PDF
+    buffer = io.BytesIO()
+    doc = SimpleDocTemplate(buffer, pagesize=A4, rightMargin=72, leftMargin=72, 
+                           topMargin=72, bottomMargin=18)
+    
+    # Estilos
+    styles = getSampleStyleSheet()
+    title_style = ParagraphStyle(
+        'CustomTitle',
+        parent=styles['Heading1'],
+        fontSize=24,
+        spaceAfter=30,
+        alignment=TA_CENTER,
+        textColor=colors.HexColor('#8b4a6b')
+    )
+    
+    heading_style = ParagraphStyle(
+        'CustomHeading',
+        parent=styles['Heading2'],
+        fontSize=16,
+        spaceAfter=12,
+        textColor=colors.HexColor('#8b4a6b')
+    )
+    
+    normal_style = ParagraphStyle(
+        'CustomNormal',
+        parent=styles['Normal'],
+        fontSize=10,
+        spaceAfter=6
+    )
+    
+    # Elementos do PDF
+    story = []
+    
+    # Título
+    story.append(Paragraph("Relatório de Vendas - Dashboard", title_style))
+    story.append(Spacer(1, 12))
+    
+    # Período
+    story.append(Paragraph(f"Período: {start_date.strftime('%d/%m/%Y')} a {end_date.strftime('%d/%m/%Y')}", normal_style))
+    story.append(Spacer(1, 20))
+    
+    # KPIs Principais
+    story.append(Paragraph("KPIs Principais", heading_style))
+    
+    receita_total = df_filtered['Valor_Com_Desconto'].sum()
+    ticket_medio = df_filtered['Valor_Com_Desconto'].mean()
+    total_vendas = len(df_filtered)
+    clientes_unicos = df_filtered['Cliente'].nunique()
+    
+    kpi_data = [
+        ['Métrica', 'Valor'],
+        ['Receita Total', f'R$ {receita_total:,.2f}'],
+        ['Ticket Médio', f'R$ {ticket_medio:,.2f}'],
+        ['Total de Vendas', f'{total_vendas:,}'],
+        ['Clientes Únicos', f'{clientes_unicos:,}']
+    ]
+    
+    kpi_table = Table(kpi_data, colWidths=[3*inch, 2*inch])
+    kpi_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff9a9e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(kpi_table)
+    story.append(Spacer(1, 20))
+    
+    # Top 5 Produtos
+    story.append(Paragraph("Top 5 Produtos por Receita", heading_style))
+    
+    top_produtos = df_filtered.groupby('Produto')['Valor_Com_Desconto'].sum().nlargest(5)
+    produtos_data = [['Produto', 'Receita']]
+    for produto, receita in top_produtos.items():
+        produtos_data.append([produto, f'R$ {receita:,.2f}'])
+    
+    produtos_table = Table(produtos_data, colWidths=[4*inch, 1.5*inch])
+    produtos_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8b4a6b')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(produtos_table)
+    story.append(Spacer(1, 20))
+    
+    # Análise por Categoria
+    story.append(Paragraph("Receita por Categoria", heading_style))
+    
+    categoria_receita = df_filtered.groupby('Categoria')['Valor_Com_Desconto'].sum().sort_values(ascending=False)
+    categoria_data = [['Categoria', 'Receita', 'Percentual']]
+    total_receita = categoria_receita.sum()
+    
+    for categoria, receita in categoria_receita.items():
+        percentual = (receita / total_receita) * 100
+        categoria_data.append([categoria, f'R$ {receita:,.2f}', f'{percentual:.1f}%'])
+    
+    categoria_table = Table(categoria_data, colWidths=[2*inch, 1.5*inch, 1*inch])
+    categoria_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff9a9e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(categoria_table)
+    story.append(Spacer(1, 20))
+    
+    # Análise por Estado
+    story.append(Paragraph("Top 5 Estados por Receita", heading_style))
+    
+    estado_receita = df_filtered.groupby('Estado')['Valor_Com_Desconto'].sum().nlargest(5)
+    estado_data = [['Estado', 'Receita']]
+    for estado, receita in estado_receita.items():
+        estado_data.append([estado, f'R$ {receita:,.2f}'])
+    
+    estado_table = Table(estado_data, colWidths=[2*inch, 2*inch])
+    estado_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#8b4a6b')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(estado_table)
+    story.append(Spacer(1, 20))
+    
+    # Análise de Avaliação
+    story.append(Paragraph("Análise de Satisfação", heading_style))
+    
+    avaliacao_media = df_filtered['Avaliação (1-5)'].mean()
+    total_avaliacoes = len(df_filtered)
+    
+    # Calcular NPS
+    promotores = len(df_filtered[df_filtered['Avaliação (1-5)'] >= 4])
+    detratores = len(df_filtered[df_filtered['Avaliação (1-5)'] <= 2])
+    nps = ((promotores - detratores) / total_avaliacoes) * 100 if total_avaliacoes > 0 else 0
+    
+    avaliacao_data = [
+        ['Métrica', 'Valor'],
+        ['Avaliação Média', f'{avaliacao_media:.2f}'],
+        ['Total de Avaliações', f'{total_avaliacoes:,}'],
+        ['NPS Score', f'{nps:.1f}'],
+        ['Promotores', f'{promotores:,}'],
+        ['Detratores', f'{detratores:,}']
+    ]
+    
+    avaliacao_table = Table(avaliacao_data, colWidths=[2.5*inch, 2*inch])
+    avaliacao_table.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#ff9a9e')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+        ('GRID', (0, 0), (-1, -1), 1, colors.black)
+    ]))
+    
+    story.append(avaliacao_table)
+    story.append(Spacer(1, 20))
+    
+    # Rodapé
+    story.append(Paragraph(f"Relatório gerado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}", normal_style))
+    
+    # Construir PDF
+    doc.build(story)
+    buffer.seek(0)
+    
+    return buffer.getvalue()
+
 def main():
     # Header principal
     st.markdown("""
@@ -350,6 +558,7 @@ def main():
     
     # KPIs principais
     st.markdown('<h2 class="section-title">📊 KPIs Principais</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2, col3, col4 = st.columns(4)
     
@@ -414,6 +623,7 @@ def main():
     
     # Gráficos de evolução temporal
     st.markdown('<h2 class="section-title">📈 Evolução Temporal</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     # Seleção de período para análise temporal
     periodo_analise = st.selectbox(
@@ -467,10 +677,13 @@ def main():
             title=f'💰 Evolução da Receita - {periodo_analise}',
             color_discrete_sequence=[ROSA_PRINCIPAL]
         )
+        fig_receita.update_traces(
+            hovertemplate='<b>Período:</b> %{x}<br><b>Receita:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Receita total acumulada no período<br><extra></extra>'
+        )
         fig_receita.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO
         )
         st.plotly_chart(fig_receita, use_container_width=True)
@@ -483,16 +696,20 @@ def main():
             title=f'🛍️ Evolução do Número de Vendas - {periodo_analise}',
             color_discrete_sequence=[ROSA_CLARO]
         )
+        fig_vendas.update_traces(
+            hovertemplate='<b>Período:</b> %{x}<br><b>Número de Vendas:</b> %{y}<br><b>Descrição:</b> Quantidade total de transações no período<br><extra></extra>'
+        )
         fig_vendas.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO
         )
         st.plotly_chart(fig_vendas, use_container_width=True)
     
     # Análise de clientes
     st.markdown('<h2 class="section-title">👥 Análise de Clientes</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
@@ -505,10 +722,17 @@ def main():
             title='🔄 Distribuição por Ciclo de Vida',
             color_discrete_sequence=[ROSA_PRINCIPAL, ROXO_MEDIO, ROXO_ESCURO_2, ROXO_SUAVE]
         )
+        fig_ciclo.update_traces(
+            text=ciclo_vida_counts.values,
+            textposition='outside',
+            textfont_size=12,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Ciclo de Vida:</b> %{x}<br><b>Número de Clientes:</b> %{y}<br><b>Descrição:</b> Clientes classificados por estágio no ciclo de vida<br><extra></extra>'
+        )
         fig_ciclo.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO,
             xaxis_title="Ciclo de Vida",
             yaxis_title="Número de Clientes"
@@ -529,28 +753,37 @@ def main():
         fig_sexo.update_traces(
             textposition='inside',
             textinfo='percent+label',
-            textfont_size=14
+            textfont_size=14,
+            hovertemplate='<b>Sexo:</b> %{label}<br><b>Quantidade:</b> %{value}<br><b>Percentual:</b> %{percent}<br><b>Descrição:</b> Distribuição de clientes por gênero<br><extra></extra>'
         )
         fig_sexo.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO
         )
         st.plotly_chart(fig_sexo, use_container_width=True)
     
     # Pirâmide etária por sexo
-    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">📊 Pirâmide Etária por Sexo</h3>', unsafe_allow_html=True)
+    st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">📊 Pirâmide Etária por Sexo</h3>', unsafe_allow_html=True)
     
     # Criar dados para pirâmide etária
     piramide_data = df_filtered.groupby(['Sexo', 'Faixa_Etaria']).size().reset_index(name='Quantidade')
     
-    # Separar por sexo
+    # Calcular porcentagens por sexo
+    total_masculino = piramide_data[piramide_data['Sexo'] == 'M']['Quantidade'].sum()
+    total_feminino = piramide_data[piramide_data['Sexo'] == 'F']['Quantidade'].sum()
+    
+    # Separar por sexo e calcular porcentagens
     masculino = piramide_data[piramide_data['Sexo'] == 'M'].copy()
     feminino = piramide_data[piramide_data['Sexo'] == 'F'].copy()
     
+    # Calcular porcentagens
+    masculino['Porcentagem'] = (masculino['Quantidade'] / total_masculino * 100).round(1)
+    feminino['Porcentagem'] = (feminino['Quantidade'] / total_feminino * 100).round(1)
+    
     # Inverter valores do masculino para criar efeito pirâmide
-    masculino['Quantidade'] = -masculino['Quantidade']
+    masculino['Porcentagem'] = -masculino['Porcentagem']
     
     # Criar gráfico de barras horizontais
     fig_piramide = go.Figure()
@@ -558,39 +791,41 @@ def main():
     # Adicionar barra masculina
     fig_piramide.add_trace(go.Bar(
         y=masculino['Faixa_Etaria'],
-        x=masculino['Quantidade'],
+        x=masculino['Porcentagem'],
         name='Masculino',
         orientation='h',
         marker_color=ROXO_MEDIO,
-        text=[abs(x) for x in masculino['Quantidade']],
+        text=[f"{abs(x):.1f}%" for x in masculino['Porcentagem']],
         textposition='inside',
-        hovertemplate='<b>Masculino</b><br>Faixa Etária: %{y}<br>Quantidade: %{text}<extra></extra>'
+        hovertemplate='<b>Masculino</b><br>Faixa Etária: %{y}<br>Porcentagem: %{text}<br>Quantidade: %{customdata}<extra></extra>',
+        customdata=masculino['Quantidade']
     ))
     
     # Adicionar barra feminina
     fig_piramide.add_trace(go.Bar(
         y=feminino['Faixa_Etaria'],
-        x=feminino['Quantidade'],
+        x=feminino['Porcentagem'],
         name='Feminino',
         orientation='h',
         marker_color=ROSA_PRINCIPAL,
-        text=feminino['Quantidade'],
+        text=[f"{x:.1f}%" for x in feminino['Porcentagem']],
         textposition='inside',
-        hovertemplate='<b>Feminino</b><br>Faixa Etária: %{y}<br>Quantidade: %{text}<extra></extra>'
+        hovertemplate='<b>Feminino</b><br>Faixa Etária: %{y}<br>Porcentagem: %{text}<br>Quantidade: %{customdata}<extra></extra>',
+        customdata=feminino['Quantidade']
     ))
     
     fig_piramide.update_layout(
         title='📊 Pirâmide Etária por Sexo',
-        xaxis_title='Quantidade de Clientes',
+        xaxis_title='Porcentagem (%)',
         yaxis_title='Faixa Etária',
         barmode='relative',
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        title_font_color=ROXO_PRINCIPAL,
+        title_font_color=BRANCO,
         font_color=ROXO_CLARO,
         height=400,
         xaxis=dict(
-            tickformat='.0f',
+            tickformat='.1f',
             showgrid=True,
             gridcolor='rgba(139, 74, 107, 0.2)'
         ),
@@ -610,7 +845,7 @@ def main():
     st.plotly_chart(fig_piramide, use_container_width=True)
     
     # Distribuição de Idades com PDF
-    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">📈 Distribuição de Idades (PDF)</h3>', unsafe_allow_html=True)
+    st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">📈 Distribuição de Idades (PDF)</h3>', unsafe_allow_html=True)
     
     # Criar dados para o gráfico de distribuição
     idades = df_filtered['Idade'].values
@@ -681,7 +916,7 @@ def main():
         ),
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        title_font_color=ROXO_PRINCIPAL,
+        title_font_color=BRANCO,
         font_color=ROXO_CLARO,
         height=400,
         legend=dict(
@@ -714,7 +949,7 @@ def main():
     st.plotly_chart(fig_distribuicao, use_container_width=True)
     
     # Segmentação de Clientes por Valor e Frequência
-    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">🏆 Segmentação de Clientes por Valor e Frequência</h3>', unsafe_allow_html=True)
+    st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">🏆 Segmentação de Clientes por Valor e Frequência</h3>', unsafe_allow_html=True)
     
     # Agrupar dados por cliente
     analise_clientes = df_filtered.groupby('Cliente').agg(
@@ -723,20 +958,23 @@ def main():
     ).reset_index()
 
     fig_clientes = px.scatter(
-        analise_clientes,
-        x='Frequencia',
-        y='Valor_Total_Gasto',
-        size='Valor_Total_Gasto', # Tamanho da bolha representa o valor
-        hover_name='Cliente',
-        title='🏆 Segmentação de Clientes por Valor e Frequência',
-        labels={'Frequencia': 'Número de Compras', 'Valor_Total_Gasto': 'Receita Total Gerada (R$)'}
+            analise_clientes,
+            x='Frequencia',
+            y='Valor_Total_Gasto',
+            size='Valor_Total_Gasto', # Tamanho da bolha representa o valor
+            hover_name='Cliente',
+            title='🏆 Segmentação de Clientes por Valor e Frequência',
+            labels={'Frequencia': 'Número de Compras', 'Valor_Total_Gasto': 'Receita Total Gerada (R$)'}
+        )
+    fig_clientes.update_traces(
+        hovertemplate='<b>Cliente:</b> %{hovertext}<br><b>Frequência:</b> %{x} compras<br><b>Valor Total Gasto:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Segmentação baseada em valor e frequência de compras<br><extra></extra>'
     )
     
     # Aplicar o tema personalizado ao gráfico
     fig_clientes.update_layout(
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        title_font_color=ROXO_PRINCIPAL,
+        title_font_color=BRANCO,
         font_color=ROXO_CLARO,
         xaxis_title="Número de Compras",
         yaxis_title="Receita Total Gerada (R$)"
@@ -746,6 +984,7 @@ def main():
     
     # Análise de Avaliação e NPS
     st.markdown('<h2 class="section-title">⭐ Análise de Avaliação e NPS</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     # Calcular NPS
     def calculate_nps(avaliacoes):
@@ -810,19 +1049,21 @@ def main():
             color=avaliacao_counts.values,
             color_continuous_scale=[ROXO_SUAVE, ROXO_MEDIO, ROXO_INTENSO, ROXO_PRINCIPAL]
         )
+        fig_avaliacoes.update_traces(
+            text=avaliacao_counts.values,
+            textposition='outside',
+            textfont_size=12,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Avaliação:</b> %{x} estrelas<br><b>Quantidade:</b> %{y}<br><b>Descrição:</b> Número de clientes que deram esta avaliação<br><extra></extra>'
+        )
         fig_avaliacoes.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO,
             xaxis_title="Avaliação (Estrelas)",
             yaxis_title="Quantidade",
             showlegend=False
-        )
-        fig_avaliacoes.update_traces(
-            text=avaliacao_counts.values,
-            textposition='outside',
-            textfont_size=12
         )
         st.plotly_chart(fig_avaliacoes, use_container_width=True)
     
@@ -847,18 +1088,19 @@ def main():
         fig_nps.update_traces(
             textposition='inside',
             textinfo='percent+label',
-            textfont_size=12
+            textfont_size=12,
+            hovertemplate='<b>Categoria:</b> %{label}<br><b>Quantidade:</b> %{value}<br><b>Percentual:</b> %{percent}<br><b>Descrição:</b> Classificação dos clientes no Net Promoter Score<br><extra></extra>'
         )
         fig_nps.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO
         )
         st.plotly_chart(fig_nps, use_container_width=True)
     
     # Evolução temporal das avaliações
-    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">📈 Evolução Temporal das Avaliações</h3>', unsafe_allow_html=True)
+    st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">📈 Evolução Temporal das Avaliações</h3>', unsafe_allow_html=True)
     
     # Filtro específico para evolução temporal das avaliações
     col_filtro1, col_filtro2 = st.columns([1, 3])
@@ -871,7 +1113,7 @@ def main():
         )
     
     with col_filtro2:
-        st.markdown(f"<p style='color: {ROXO_CLARO}; font-size: 0.9rem; margin-top: 0.5rem;'>Selecione o período para análise da evolução das avaliações e NPS</p>", unsafe_allow_html=True)
+        st.markdown(f"<p style='color: {BRANCO}; font-size: 0.9rem; margin-top: 0.5rem;'>Selecione o período para análise da evolução das avaliações e NPS</p>", unsafe_allow_html=True)
     
     # Calcular NPS por período
     if periodo_avaliacao == "Diário":
@@ -916,10 +1158,13 @@ def main():
             title=f'⭐ Evolução da Avaliação Média - {periodo_avaliacao}',
             color_discrete_sequence=[ROSA_PRINCIPAL]
         )
+        fig_avaliacao_evol.update_traces(
+            hovertemplate='<b>Período:</b> %{x}<br><b>Avaliação Média:</b> %{y:.2f}<br><b>Descrição:</b> Média das avaliações dos clientes no período<br><extra></extra>'
+        )
         fig_avaliacao_evol.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO,
             xaxis_title="Período",
             yaxis_title="Avaliação Média"
@@ -935,10 +1180,13 @@ def main():
             title=f'📊 Evolução do NPS - {periodo_avaliacao}',
             color_discrete_sequence=[ROXO_INTENSO]
         )
+        fig_nps_evol.update_traces(
+            hovertemplate='<b>Período:</b> %{x}<br><b>NPS Score:</b> %{y:.1f}<br><b>Descrição:</b> Net Promoter Score calculado para o período<br><extra></extra>'
+        )
         fig_nps_evol.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO,
             xaxis_title="Período",
             yaxis_title="NPS Score"
@@ -950,12 +1198,16 @@ def main():
     
     # Análise de produtos
     st.markdown('<h2 class="section-title">👗 Análise de Produtos</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
     with col1:
         # Top 10 produtos por receita
         top_produtos = df_filtered.groupby('Produto')['Valor_Com_Desconto'].sum().nlargest(10)
+        # Ordenar do maior para o menor (mais vendido para menos vendido)
+        top_produtos = top_produtos.sort_values(ascending=True)
+        
         fig_produtos = px.bar(
             x=top_produtos.values,
             y=top_produtos.index,
@@ -963,13 +1215,23 @@ def main():
             title='🏆 Top 10 Produtos por Receita',
             color_discrete_sequence=['#ff9a9e']
         )
+        fig_produtos.update_traces(
+            text=[f'R$ {valor:,.2f}' for valor in top_produtos.values],
+            textposition='outside',
+            textfont_size=10,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Produto:</b> %{y}<br><b>Receita Total:</b> R$ %{x:,.2f}<br><b>Descrição:</b> Receita acumulada gerada por este produto<br><extra></extra>'
+        )
         fig_produtos.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color='#8b4a6b',
+            title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Receita (R$)",
-            yaxis_title="Produto"
+            yaxis_title="Produto",
+            xaxis=dict(
+                range=[0, top_produtos.max() * 1.15]  # Aumenta o range do eixo X em 15% para acomodar os labels
+            )
         )
         st.plotly_chart(fig_produtos, use_container_width=True)
     
@@ -986,15 +1248,18 @@ def main():
             color='Receita',
             color_continuous_scale=[ROXO_SUAVE, ROXO_ESCURO, ROXO_MEDIO, ROXO_INTENSO, ROXO_PRINCIPAL]
         )
+        fig_treemap.update_traces(
+            hovertemplate='<b>Categoria:</b> %{label}<br><b>Receita:</b> R$ %{value:,.2f}<br><b>Descrição:</b> Receita total gerada por esta categoria de produto<br><extra></extra>'
+        )
         fig_treemap.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color=ROXO_PRINCIPAL,
+            title_font_color=BRANCO,
             font_color=ROXO_CLARO
         )
         st.plotly_chart(fig_treemap, use_container_width=True)
     
-    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">🎨 Heatmap: Quantidade Vendida por Cor vs Tamanho</h3>', unsafe_allow_html=True)
+    st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">🎨 Heatmap: Quantidade Vendida por Cor vs Tamanho</h3>', unsafe_allow_html=True)
 
     # 1. ORDENAÇÃO LÓGICA DOS TAMANHOS
     # Define a ordem correta para os tamanhos
@@ -1030,7 +1295,7 @@ def main():
         title_x=0.5,
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        title_font_color=ROXO_PRINCIPAL,
+        title_font_color=BRANCO,
         font_color=ROXO_CLARO,
         xaxis_title="Tamanho",
         yaxis_title="Cor",
@@ -1049,23 +1314,26 @@ def main():
     st.plotly_chart(fig_heatmap, use_container_width=True)
     
     # Análise de efetividade dos descontos
-    st.markdown(f'<h3 style="color: {ROXO_PRINCIPAL}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">💸 Análise de Efetividade dos Descontos</h3>', unsafe_allow_html=True)
+    st.markdown(f'<h3 style="color: {BRANCO}; font-size: 1.4rem; margin: 1.5rem 0 1rem 0;">💸 Análise de Efetividade dos Descontos</h3>', unsafe_allow_html=True)
     
     fig_desconto = px.scatter(
-        df_filtered,
-        x='Desconto (%)',
-        y='Quantidade',
-        color='Categoria', # Opcional: para ver o comportamento por categoria
-        title='💸 Análise de Efetividade dos Descontos',
-        labels={'Desconto (%)': 'Desconto Aplicado (%)', 'Quantidade': 'Itens Vendidos na Transação'},
-        trendline='ols' # Adiciona uma linha de tendência para visualizar a correlação
+            df_filtered,
+            x='Desconto (%)',
+            y='Quantidade',
+            color='Categoria', # Opcional: para ver o comportamento por categoria
+            title='💸 Análise de Efetividade dos Descontos',
+            labels={'Desconto (%)': 'Desconto Aplicado (%)', 'Quantidade': 'Itens Vendidos na Transação'},
+            trendline='ols' # Adiciona uma linha de tendência para visualizar a correlação
+        )
+    fig_desconto.update_traces(
+        hovertemplate='<b>Desconto:</b> %{x}%<br><b>Quantidade:</b> %{y} itens<br><b>Categoria:</b> %{legendgroup}<br><b>Descrição:</b> Relação entre desconto aplicado e quantidade vendida<br><extra></extra>'
     )
     
     # Aplicar o tema personalizado ao gráfico
     fig_desconto.update_layout(
         plot_bgcolor='rgba(0,0,0,0)',
         paper_bgcolor='rgba(0,0,0,0)',
-        title_font_color=ROXO_PRINCIPAL,
+        title_font_color=BRANCO,
         font_color=ROXO_CLARO,
         xaxis_title="Desconto Aplicado (%)",
         yaxis_title="Itens Vendidos na Transação"
@@ -1075,6 +1343,7 @@ def main():
     
     # Análise geográfica
     st.markdown('<h2 class="section-title">🗺️ Análise Geográfica</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
@@ -1085,12 +1354,19 @@ def main():
             x=estado_receita.index,
             y=estado_receita.values,
             title='🏆 Top 10 Estados por Receita',
-            color_discrete_sequence=['#ff9a9e']
+            color_discrete_sequence=[ROSA_PRINCIPAL]
+        )
+        fig_estados.update_traces(
+            text=[f'R$ {valor:,.2f}' for valor in estado_receita.values],
+            textposition='outside',
+            textfont_size=10,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Estado:</b> %{x}<br><b>Receita Total:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Receita total gerada por vendas neste estado<br><extra></extra>'
         )
         fig_estados.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color='#8b4a6b',
+            title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Estado",
             yaxis_title="Receita (R$)"
@@ -1106,16 +1382,20 @@ def main():
             title='🏪 Receita por Canal de Venda',
             color_discrete_sequence=['#ff9a9e', '#fecfef']
         )
+        fig_canal.update_traces(
+            hovertemplate='<b>Canal:</b> %{label}<br><b>Receita:</b> R$ %{value:,.2f}<br><b>Percentual:</b> %{percent}<br><b>Descrição:</b> Distribuição da receita por canal de venda<br><extra></extra>'
+        )
         fig_canal.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color='#8b4a6b',
+            title_font_color=BRANCO,
             font_color='#6b3a4a'
         )
         st.plotly_chart(fig_canal, use_container_width=True)
     
     # Análise de performance por vendedor
     st.markdown('<h2 class="section-title">👨‍💼 Performance dos Vendedores</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     vendedor_stats = df_filtered.groupby('Vendedor').agg({
         'Valor_Com_Desconto': 'sum',
@@ -1133,6 +1413,7 @@ def main():
     
     # Análise de sazonalidade
     st.markdown('<h2 class="section-title">📅 Análise de Sazonalidade</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
     
     col1, col2 = st.columns(2)
     
@@ -1148,10 +1429,17 @@ def main():
             title='📊 Receita por Dia da Semana',
             color_discrete_sequence=['#ff9a9e']
         )
+        fig_dia.update_traces(
+            text=[f'R$ {valor:,.2f}' for valor in dia_semana_receita.values],
+            textposition='outside',
+            textfont_size=10,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Dia da Semana:</b> %{x}<br><b>Receita Total:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Receita total gerada neste dia da semana<br><extra></extra>'
+        )
         fig_dia.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color='#8b4a6b',
+            title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Dia da Semana",
             yaxis_title="Receita (R$)"
@@ -1167,15 +1455,53 @@ def main():
             title='📅 Receita por Mês',
             color_discrete_sequence=['#fecfef']
         )
+        fig_mes.update_traces(
+            text=[f'R$ {valor:,.2f}' for valor in mes_receita.values],
+            textposition='outside',
+            textfont_size=10,
+            textfont_color=BRANCO,
+            hovertemplate='<b>Mês:</b> %{x}<br><b>Receita Total:</b> R$ %{y:,.2f}<br><b>Descrição:</b> Receita total gerada neste mês<br><extra></extra>'
+        )
         fig_mes.update_layout(
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
-            title_font_color='#8b4a6b',
+            title_font_color=BRANCO,
             font_color='#6b3a4a',
             xaxis_title="Mês",
             yaxis_title="Receita (R$)"
         )
         st.plotly_chart(fig_mes, use_container_width=True)
+    
+    # Seção de Relatório PDF
+    st.markdown("---")
+    st.markdown('<h2 class="section-title">📄 Gerar Relatório PDF</h2>', unsafe_allow_html=True)
+    st.markdown("<br>", unsafe_allow_html=True)
+    
+    col1, col2, col3 = st.columns([1, 2, 1])
+    
+    with col2:
+        if st.button("📊 Gerar Relatório PDF", type="primary", use_container_width=True):
+            try:
+                # Gerar PDF
+                pdf_data = generate_sales_report_pdf(df_filtered, start_date, end_date)
+                
+                # Criar nome do arquivo com data
+                filename = f"relatorio_vendas_{start_date.strftime('%Y%m%d')}_{end_date.strftime('%Y%m%d')}.pdf"
+                
+                # Botão de download
+                st.download_button(
+                    label="📥 Baixar Relatório PDF",
+                    data=pdf_data,
+                    file_name=filename,
+                    mime="application/pdf",
+                    use_container_width=True
+                )
+                
+                st.success("✅ Relatório PDF gerado com sucesso!")
+                st.info("📋 O relatório inclui: KPIs principais, top produtos, análise por categoria, top estados e análise de satisfação.")
+                
+            except Exception as e:
+                st.error(f"❌ Erro ao gerar relatório: {e}")
     
     # Footer
     st.markdown("---")
