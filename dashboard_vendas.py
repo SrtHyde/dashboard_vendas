@@ -21,9 +21,7 @@ import tempfile
 import os
 warnings.filterwarnings('ignore')
 
-# =============================================================================
-# PALETA DE CORES  - IDENTIDADE VISUAL
-# =============================================================================
+
 
 # Cores principais
 ROSA_PRINCIPAL = '#ff9a9e'      # Rosa vibrante - cor principal do tema
